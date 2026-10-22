@@ -1,6 +1,7 @@
 import datetime
 import requests
 import pandas as pd
+import plotly.express as px
 import pytz
 import streamlit as st
 
@@ -18,20 +19,17 @@ st.caption("KOBIS(영화관입장권통합전산망) API 연동 앱")
 
 # ==========================================
 # 2. 날짜 선택 기능 (한국 표준시 KST 기준)
-# 선택 가능한 최대 날짜는 '어제'로 제한 (오늘 데이터는 미집계)
 # ==========================================
 tz_kst = pytz.timezone("Asia/Seoul")
 now_kst = datetime.datetime.now(tz_kst)
 yesterday_kst = (now_kst - datetime.timedelta(days=1)).date()
 
-# 달력 위젯 생성 (기본값: 어제, 최대값: 어제)
 selected_date = st.date_input(
     "📅 조회할 날짜를 선택하세요",
     value=yesterday_kst,
     max_value=yesterday_kst
 )
 
-# API 요청용 날짜 문자열 변환 (YYYYMMDD)
 target_dt = selected_date.strftime("%Y%m%d")
 formatted_date = selected_date.strftime("%Y년 %m월 %d일")
 
@@ -54,7 +52,7 @@ if not api_key:
 # ==========================================
 # 4. KOBIS API 데이터 요청 함수
 # ==========================================
-@st.cache_data(ttl=3600)  # 1시간 동안 응답 데이터 캐싱
+@st.cache_data(ttl=3600)
 def fetch_daily_boxoffice(key, target_date):
     url = "https://www.kobis.or.kr/kobisopenapi/webservice/rest/boxoffice/searchDailyBoxOfficeList.json"
     params = {
@@ -78,7 +76,6 @@ if error_msg:
     st.info("💡 인터넷 연결 상태 및 API 주소를 확인해 주세요.")
     st.stop()
 
-# KOBIS 오류 응답 처리 (faultInfo)
 if "faultInfo" in data:
     fault_message = data["faultInfo"].get("message", "알 수 없는 오류가 발생했습니다.")
     st.error(f"❌ API 오류 응답: {fault_message}")
@@ -89,7 +86,6 @@ if "faultInfo" in data:
     )
     st.stop()
 
-# 영화 목록 검증 (비어있을 경우 지정된 메시지 출력)
 boxoffice_result = data.get("boxOfficeResult", {})
 movie_list = boxoffice_result.get("dailyBoxOfficeList", [])
 
@@ -103,30 +99,24 @@ if not movie_list:
 # ==========================================
 df = pd.DataFrame(movie_list)
 
-# 숫자로 변환할 컬럼 지정
 int_columns = ["rank", "rankInten", "audiCnt", "audiAcc", "scrnCnt", "showCnt"]
 for col in int_columns:
     if col in df.columns:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
 
-# 1) 순위 변동(rankInten) 텍스트 및 화살표 가공 함수
 def format_rank_change(inten):
     if inten > 0:
-        return f"🔺 {inten}"  # 순위 상승 (빨간 위 화살표)
+        return f"🔺 {inten}"
     elif inten < 0:
-        return f"🔹 {abs(inten)}"  # 순위 하강 (파란 아래 화살표)
+        return f"🔹 {abs(inten)}"
     else:
-        return "-"  # 변동 없음
+        return "-"
 
 df["rank_change"] = df["rankInten"].apply(format_rank_change)
 
-# 2) 누적 관객수에 따른 이모지 추가 함수
-# - 1,000만 명 이상: 👑 (왕관)
-# - 100만 명 이상: 🏆 (트로피)
 def format_movie_name(row):
     name = row["movieNm"]
     acc_cnt = row["audiAcc"]
-    
     if acc_cnt >= 10_000_000:
         return f"👑 {name}"
     elif acc_cnt >= 1_000_000:
@@ -134,6 +124,9 @@ def format_movie_name(row):
     return name
 
 df["movieNm_display"] = df.apply(format_movie_name, axis=1)
+
+default_poster_url = "https://via.placeholder.com/150x220?text=No+Poster"
+df["poster_url"] = default_poster_url
 
 # ==========================================
 # 7. 1위 영화 지표 카드 (Metrics)
@@ -145,35 +138,82 @@ st.subheader(f"🥇 1위: {top1_movie['movieNm_display']}")
 
 col1, col2, col3 = st.columns(3)
 with col1:
-    st.metric(
-        label="당일 관객수",
-        value=f"{top1_movie['audiCnt']:,} 명"
-    )
+    st.metric(label="당일 관객수", value=f"{top1_movie['audiCnt']:,} 명")
 with col2:
-    st.metric(
-        label="누적 관객수",
-        value=f"{top1_movie['audiAcc']:,} 명"
-    )
+    st.metric(label="누적 관객수", value=f"{top1_movie['audiAcc']:,} 명")
 with col3:
-    st.metric(
-        label="스크린 수",
-        value=f"{top1_movie['scrnCnt']:,} 개"
-    )
+    st.metric(label="스크린 수", value=f"{top1_movie['scrnCnt']:,} 개")
 
 # ==========================================
-# 8. 상위 5개 영화 관객수 막대그래프
+# 8. 차트 영역 (막대그래프 & 원그래프 나란히 배치)
 # ==========================================
 st.divider()
-st.subheader("📊 관객수 TOP 5 시각화")
+st.subheader("📊 박스오피스 시각화")
 
-df_top5 = df.head(5)[["movieNm_display", "audiCnt"]].copy()
-df_top5.columns = ["영화명", "당일 관객수"]
+# 화면을 두 개의 열로 나누어 좌측엔 당일 관객(막대), 우측엔 누적 관객(파이) 배치
+chart_col1, chart_col2 = st.columns(2)
 
-st.bar_chart(
-    df_top5,
-    x="영화명",
-    y="당일 관객수"
-)
+with chart_col1:
+    st.markdown("**■ 당일 관객수 TOP 5 (막대그래프)**")
+    df_top5 = df.head(5).copy()
+    
+    fig_bar = px.bar(
+        df_top5,
+        x="movieNm_display",
+        y="audiCnt",
+        labels={"movieNm_display": "영화명", "audiCnt": "당일 관객수"},
+        hover_data={
+            "movieNm_display": True,
+            "audiCnt": ":,",
+            "audiAcc": ":,",
+            "poster_url": True
+        }
+    )
+
+    fig_bar.update_traces(
+        hovertemplate="""
+        <b>%{x}</b><br><br>
+        <img src='%{customdata[2]}' width='120'><br><br>
+        <b>당일 관객수:</b> %{y:,} 명<br>
+        <b>누적 관객수:</b> %{customdata[1]:,} 명
+        <extra></extra>
+        """,
+        customdata=df_top5[["movieNm", "audiAcc", "poster_url"]].values
+    )
+
+    fig_bar.update_layout(
+        xaxis_title="영화명",
+        yaxis_title="당일 관객수",
+        hoverlabel=dict(bgcolor="white", font_size=13)
+    )
+    fig_bar.update_xaxes(fixedrange=True)
+    fig_bar.update_yaxes(fixedrange=True)
+
+    st.plotly_chart(fig_bar, use_container_width=True, config={'scrollZoom': False})
+
+with chart_col2:
+    st.markdown("**■ TOP 10 누적 관객수 비율 (원그래프)**")
+    
+    # 누적 관객수 원그래프 생성 (TOP 10 전체)
+    fig_pie = px.pie(
+        df,
+        names="movieNm_display",
+        values="audiAcc",
+        hole=0.3  # 가운데가 살짝 뚫린 도넛 형태로 만들어 시각적 효과 향상
+    )
+    
+    fig_pie.update_traces(
+        textposition='inside',
+        textinfo='percent+label',
+        hovertemplate="<b>%{label}</b><br>누적 관객수: %{value:,} 명<br>비율: %{percent}<extra></extra>"
+    )
+    
+    fig_pie.update_layout(
+        showlegend=False, # 라벨이 내부에 표시되므로 범례 숨김
+        hoverlabel=dict(bgcolor="white", font_size=13)
+    )
+    
+    st.plotly_chart(fig_pie, use_container_width=True, config={'scrollZoom': False})
 
 # ==========================================
 # 9. 박스오피스 전체 순위 표 출력
@@ -181,7 +221,6 @@ st.bar_chart(
 st.divider()
 st.subheader("📋 전체 박스오피스 순위")
 
-# 표에 보여줄 컬럼 선택 및 정렬
 df_display = df[[
     "rank", "rank_change", "movieNm_display", "openDt", "audiCnt", "audiAcc", "scrnCnt"
 ]].copy()
@@ -190,7 +229,6 @@ df_display.columns = [
     "순위", "순위 변동", "영화명", "개봉일", "관객수(명)", "누적관객(명)", "스크린수(개)"
 ]
 
-# 표 출력 (숫자 콤마 포맷팅 적용)
 st.dataframe(
     df_display.style.format({
         "관객수(명)": "{:,}",
