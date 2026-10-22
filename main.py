@@ -125,9 +125,6 @@ def format_movie_name(row):
 
 df["movieNm_display"] = df.apply(format_movie_name, axis=1)
 
-default_poster_url = "https://via.placeholder.com/150x220?text=No+Poster"
-df["poster_url"] = default_poster_url
-
 # ==========================================
 # 7. 1위 영화 지표 카드 (Metrics)
 # ==========================================
@@ -145,61 +142,33 @@ with col3:
     st.metric(label="스크린 수", value=f"{top1_movie['scrnCnt']:,} 개")
 
 # ==========================================
-# 8. 차트 영역 (막대그래프 & 원그래프 나란히 배치)
+# 8. 차트 영역 (막대그래프 & 원그래프)
 # ==========================================
 st.divider()
 st.subheader("📊 박스오피스 시각화")
 
-# 화면을 두 개의 열로 나누어 좌측엔 당일 관객(막대), 우측엔 누적 관객(파이) 배치
 chart_col1, chart_col2 = st.columns(2)
 
 with chart_col1:
     st.markdown("**■ 당일 관객수 TOP 5 (막대그래프)**")
-    df_top5 = df.head(5).copy()
+    df_top5 = df.head(5)[["movieNm_display", "audiCnt"]].copy()
+    df_top5.columns = ["영화명", "당일 관객수"]
     
-    fig_bar = px.bar(
+    # 기본 막대그래프로 원복 (포스터 호버 기능 및 축 고정 제거)
+    st.bar_chart(
         df_top5,
-        x="movieNm_display",
-        y="audiCnt",
-        labels={"movieNm_display": "영화명", "audiCnt": "당일 관객수"},
-        hover_data={
-            "movieNm_display": True,
-            "audiCnt": ":,",
-            "audiAcc": ":,",
-            "poster_url": True
-        }
+        x="영화명",
+        y="당일 관객수"
     )
-
-    fig_bar.update_traces(
-        hovertemplate="""
-        <b>%{x}</b><br><br>
-        <img src='%{customdata[2]}' width='120'><br><br>
-        <b>당일 관객수:</b> %{y:,} 명<br>
-        <b>누적 관객수:</b> %{customdata[1]:,} 명
-        <extra></extra>
-        """,
-        customdata=df_top5[["movieNm", "audiAcc", "poster_url"]].values
-    )
-
-    fig_bar.update_layout(
-        xaxis_title="영화명",
-        yaxis_title="당일 관객수",
-        hoverlabel=dict(bgcolor="white", font_size=13)
-    )
-    fig_bar.update_xaxes(fixedrange=True)
-    fig_bar.update_yaxes(fixedrange=True)
-
-    st.plotly_chart(fig_bar, use_container_width=True, config={'scrollZoom': False})
 
 with chart_col2:
     st.markdown("**■ TOP 10 누적 관객수 비율 (원그래프)**")
     
-    # 누적 관객수 원그래프 생성 (TOP 10 전체)
     fig_pie = px.pie(
         df,
         names="movieNm_display",
         values="audiAcc",
-        hole=0.3  # 가운데가 살짝 뚫린 도넛 형태로 만들어 시각적 효과 향상
+        hole=0.3
     )
     
     fig_pie.update_traces(
@@ -209,11 +178,12 @@ with chart_col2:
     )
     
     fig_pie.update_layout(
-        showlegend=False, # 라벨이 내부에 표시되므로 범례 숨김
+        showlegend=False,
         hoverlabel=dict(bgcolor="white", font_size=13)
     )
     
-    st.plotly_chart(fig_pie, use_container_width=True, config={'scrollZoom': False})
+    # 축 스크롤 줌 비활성화 옵션(config) 제거
+    st.plotly_chart(fig_pie, use_container_width=True)
 
 # ==========================================
 # 9. 박스오피스 전체 순위 표 출력
