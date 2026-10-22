@@ -120,10 +120,16 @@ def format_rank_change(inten):
 
 df["rank_change"] = df["rankInten"].apply(format_rank_change)
 
-# 2) 누적 관객 100만 명 이상 트로피 이모지 추가 함수
+# 2) 누적 관객수에 따른 이모지 추가 함수
+# - 1,000만 명 이상: 👑 (왕관)
+# - 100만 명 이상: 🏆 (트로피)
 def format_movie_name(row):
     name = row["movieNm"]
-    if row["audiAcc"] >= 1_000_000:
+    acc_cnt = row["audiAcc"]
+    
+    if acc_cnt >= 10_000_000:
+        return f"👑 {name}"
+    elif acc_cnt >= 1_000_000:
         return f"🏆 {name}"
     return name
 
